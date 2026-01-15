@@ -1,0 +1,21 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# Virtual environment
+venv/
+
+# Environment variables (secrets)
+.env
+*.env
+
+# Streamlit config
+.streamlit/
+
+# FAISS / vector stores
+*.pkl
+*.faiss
+
+# OS files
+.DS_Store
+Thumbs.db
