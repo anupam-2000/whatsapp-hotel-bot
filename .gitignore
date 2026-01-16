@@ -9,12 +9,13 @@ venv/
 .env
 *.env
 
-# Streamlit config
-.streamlit/
+# SQLite database
+*.db
+*.sqlite3
 
-# FAISS / vector stores
-*.pkl
-*.faiss
+# Old Excel / data storage (no longer used)
+data/
+*.xlsx
 
 # OS files
 .DS_Store

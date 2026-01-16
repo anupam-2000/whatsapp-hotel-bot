@@ -11,12 +11,12 @@ async def whatsapp_webhook(request: Request):
     user_msg = form.get("Body")
     user_phone = form.get("From")
 
+    print("Message:", user_msg)
+    print("From:", user_phone)
+
     reply = handle_message(user_phone, user_msg)
+    print("Reply generated:", reply)
 
     resp = MessagingResponse()
     resp.message(reply)
-
-    return Response(
-        content=str(resp),
-        media_type="application/xml"
-    )
+    return Response(content=str(resp), media_type="application/xml")

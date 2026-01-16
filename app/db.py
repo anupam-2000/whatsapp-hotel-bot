@@ -1,15 +1,21 @@
-import os
 from sqlalchemy import create_engine
-from dotenv import load_dotenv
+from sqlalchemy.orm import sessionmaker, declarative_base
+import os
 
-load_dotenv()
+os.makedirs("data", exist_ok=True)
 
-DB_HOST = os.getenv("DB_HOST")
-DB_USER = os.getenv("DB_USER")
-DB_PASSWORD = os.getenv("DB_PASSWORD")
-DB_NAME = os.getenv("DB_NAME")
+DATABASE_URL = "sqlite:///./data/bookings.db"
 
-DATABASE_URL = "mysql+mysqlconnector://root@localhost/hotel_bot"
+engine = create_engine(
+    DATABASE_URL,
+    connect_args={"check_same_thread": False}
+)
 
+SessionLocal = sessionmaker(
+    autocommit=False,
+    autoflush=False,
+    bind=engine
+)
 
-engine = create_engine(DATABASE_URL, echo=False)
+Base = declarative_base()
+

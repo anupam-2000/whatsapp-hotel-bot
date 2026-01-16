@@ -1,64 +1,63 @@
-import pandas as pd
 from datetime import datetime
-import os
+from sqlalchemy.orm import Session
+from app.db import SessionLocal
+from app.models import Booking
 
-FILE_PATH = "data/bookings.xlsx"
+def handle_message(phone: str, message: str) -> str:
+    message = message.strip().lower()
+    db: Session = SessionLocal()
 
-def load_data():
-    if os.path.exists(FILE_PATH):
-        return pd.read_excel(FILE_PATH)
-    else:
-        return pd.DataFrame(columns=[
-            "phone", "name", "checkin", "checkout", "step"
-        ])
+    try:
+        # Restart anytime
+        if message == "restart":
+            db.query(Booking).filter(Booking.phone == phone).delete()
+            db.commit()
+            return "🔄 Restarted! May I have your name?"
 
-def save_data(df):
-    os.makedirs("data", exist_ok=True)
-    df.to_excel(FILE_PATH, index=False)
+        booking = (
+            db.query(Booking)
+            .filter(Booking.phone == phone)
+            .order_by(Booking.id.desc())
+            .first()
+        )
 
-def handle_message(phone, message):
-    message = message.strip()
-    df = load_data()
+        # New user or new test booking
+        if not booking:
+            booking = Booking(
+                phone=phone,
+                step=1
+            )
+            db.add(booking)
+            db.commit()
+            return "May I have your name?"
 
-    if phone not in df["phone"].values:
-        # New user
-        df = pd.concat([df, pd.DataFrame([{
-            "phone": phone,
-            "name": None,
-            "checkin": None,
-            "checkout": None,
-            "step": 1
-        }])], ignore_index=True)
-        save_data(df)
-        return "May I have your name?"
+        if booking.step == 1:
+            booking.name = message.title()
+            booking.step = 2
+            db.commit()
+            return f"Nice to meet you, {booking.name}! What is your check-in date? (YYYY-MM-DD)"
 
-    user = df[df["phone"] == phone].iloc[0]
-    idx = df[df["phone"] == phone].index[0]
+        if booking.step == 2:
+            try:
+                datetime.strptime(message, "%Y-%m-%d")
+                booking.checkin = message
+                booking.step = 3
+                db.commit()
+                return "Got it! What is your check-out date? (YYYY-MM-DD)"
+            except ValueError:
+                return "❌ Please enter the check-in date in YYYY-MM-DD format."
 
-    if user["step"] == 1:
-        df.at[idx, "name"] = message
-        df.at[idx, "step"] = 2
-        save_data(df)
-        return f"Nice to meet you, {message}! What is your check-in date? (YYYY-MM-DD)"
+        if booking.step == 3:
+            try:
+                datetime.strptime(message, "%Y-%m-%d")
+                booking.checkout = message
+                booking.step = 4
+                db.commit()
+                return "✅ Booking saved! Type *restart* to make another booking."
+            except ValueError:
+                return "❌ Please enter the check-out date in YYYY-MM-DD format."
 
-    if user["step"] == 2:
-        try:
-            datetime.strptime(message, "%Y-%m-%d")
-            df.at[idx, "checkin"] = message
-            df.at[idx, "step"] = 3
-            save_data(df)
-            return "Got it! What is your check-out date? (YYYY-MM-DD)"
-        except ValueError:
-            return "Please enter the check-in date in YYYY-MM-DD format."
+        return "Type *restart* to create a new booking."
 
-    if user["step"] == 3:
-        try:
-            datetime.strptime(message, "%Y-%m-%d")
-            df.at[idx, "checkout"] = message
-            df.at[idx, "step"] = 4
-            save_data(df)
-            return "✅ Your booking request is saved! We’ll contact you shortly."
-        except ValueError:
-            return "Please enter the check-out date in YYYY-MM-DD format."
-
-    return "Your booking is already completed. Type 'restart' to start again."
+    finally:
+        db.close()
