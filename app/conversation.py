@@ -1,19 +1,13 @@
-from datetime import datetime
+from datetime import datetime, date
 from sqlalchemy.orm import Session
 from app.db import SessionLocal
 from app.models import Booking
 
 def handle_message(phone: str, message: str) -> str:
-    message = message.strip().lower()
+    message = message.strip()
     db: Session = SessionLocal()
 
     try:
-        # Restart anytime
-        if message == "restart":
-            db.query(Booking).filter(Booking.phone == phone).delete()
-            db.commit()
-            return "🔄 Restarted! May I have your name?"
-
         booking = (
             db.query(Booking)
             .filter(Booking.phone == phone)
@@ -21,11 +15,12 @@ def handle_message(phone: str, message: str) -> str:
             .first()
         )
 
-        # New user or new test booking
-        if not booking:
+        # Start new booking if none or completed
+        if not booking or booking.step == 5 or message.lower() == "restart":
             booking = Booking(
                 phone=phone,
-                step=1
+                step=1,
+                created_date=date.today()
             )
             db.add(booking)
             db.commit()
@@ -35,29 +30,39 @@ def handle_message(phone: str, message: str) -> str:
             booking.name = message.title()
             booking.step = 2
             db.commit()
-            return f"Nice to meet you, {booking.name}! What is your check-in date? (YYYY-MM-DD)"
+            return "Which city/location are you booking for?"
 
         if booking.step == 2:
-            try:
-                datetime.strptime(message, "%Y-%m-%d")
-                booking.checkin = message
-                booking.step = 3
-                db.commit()
-                return "Got it! What is your check-out date? (YYYY-MM-DD)"
-            except ValueError:
-                return "❌ Please enter the check-in date in YYYY-MM-DD format."
+            booking.location = message.title()
+            booking.step = 3
+            db.commit()
+            return "What is your check-in date? (YYYY-MM-DD)"
 
         if booking.step == 3:
             try:
-                datetime.strptime(message, "%Y-%m-%d")
-                booking.checkout = message
+                checkin_date = datetime.strptime(message, "%Y-%m-%d").date()
+                if checkin_date < date.today():
+                    return "❌ Check-in date cannot be in the past."
+                booking.checkin = message
                 booking.step = 4
+                db.commit()
+                return "What is your check-out date? (YYYY-MM-DD)"
+            except ValueError:
+                return "❌ Please enter date in YYYY-MM-DD format."
+
+        if booking.step == 4:
+            try:
+                checkout_date = datetime.strptime(message, "%Y-%m-%d").date()
+                if checkout_date <= datetime.strptime(booking.checkin, "%Y-%m-%d").date():
+                    return "❌ Check-out must be after check-in."
+                booking.checkout = message
+                booking.step = 5
                 db.commit()
                 return "✅ Booking saved! Type *restart* to make another booking."
             except ValueError:
-                return "❌ Please enter the check-out date in YYYY-MM-DD format."
+                return "❌ Please enter date in YYYY-MM-DD format."
 
-        return "Type *restart* to create a new booking."
+        return "Type *restart* to start a new booking."
 
     finally:
         db.close()
