@@ -4,6 +4,7 @@ from app.db import SessionLocal
 from app.models import Booking
 import pandas as pd
 import os
+import json
 
 # ==========================
 # LOAD CSV DATA
@@ -12,47 +13,47 @@ import os
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 
-employees_df = pd.read_csv(os.path.join(DATA_DIR, "employees.csv"), encoding="utf-8-sig")
-hotels_df = pd.read_csv(os.path.join(DATA_DIR, "hotels.csv"), encoding="utf-8-sig")
-booking_history_df = pd.read_csv(os.path.join(DATA_DIR, "booking_history.csv"), encoding="utf-8-sig")
+employees_df = pd.read_csv(os.path.join(DATA_DIR, "employees.csv"))
+hotels_df = pd.read_csv(os.path.join(DATA_DIR, "hotels.csv"))
+booking_history_df = pd.read_csv(os.path.join(DATA_DIR, "booking_history.csv"))
 
-employees_df.columns = employees_df.columns.str.strip().str.lower()
-hotels_df.columns = hotels_df.columns.str.strip().str.lower()
-booking_history_df.columns = booking_history_df.columns.str.strip().str.lower()
+employees_df.columns = employees_df.columns.str.lower()
+hotels_df.columns = hotels_df.columns.str.lower()
+booking_history_df.columns = booking_history_df.columns.str.lower()
 
-PRICE_COL = next(
-    c for c in hotels_df.columns
-    if c in {"price_per_night", "price", "room_price", "rate"}
-)
+PRICE_COL = next(c for c in hotels_df.columns if c in {
+    "price_per_night", "price", "room_price", "rate"
+})
 
 # ==========================
 # HELPERS
 # ==========================
 
-def get_employee(name: str):
-    df = employees_df[
-        employees_df["employee_name"].str.lower() == name.lower()
-    ]
+def get_employee(name):
+    df = employees_df[employees_df["employee_name"].str.lower() == name.lower()]
     return None if df.empty else df.iloc[0]
 
 
-def get_previous_good_hotel(employee_id, city, min_rating=4):
+def get_previous_good_hotel(employee_id, city):
     history = booking_history_df[
         (booking_history_df["employee_id"] == employee_id) &
-        (booking_history_df["city"].str.lower() == city.lower()) &
-        (booking_history_df["rating"] >= min_rating)
+        (booking_history_df["city"].str.lower() == city.lower())
     ]
 
     if history.empty:
         return None
 
-    merged = history.merge(hotels_df, on="hotel_id", how="left")
-    return merged.iloc[0]
+    last = history.iloc[-1]
+    hotel = hotels_df[hotels_df["hotel_id"] == last["hotel_id"]].iloc[0]
+
+    return {
+        "hotel_name": hotel["hotel_name"],
+        "price": int(hotel[PRICE_COL])
+    }
 
 
 def recommend_hotels(city, price_cap=None):
     df = hotels_df[hotels_df["city"].str.lower() == city.lower()]
-
     if price_cap is not None:
         df = df[df[PRICE_COL] <= price_cap]
 
@@ -62,19 +63,10 @@ def recommend_hotels(city, price_cap=None):
     ).head(3)
 
 
-def build_recommendation_text(city, price_cap=None):
-    recs = recommend_hotels(city, price_cap)
-
-    if recs.empty:
-        return "❌ No hotels available for this location."
-
+def build_recommendation_text(df):
     msg = "Here are some recommended hotels:\n"
-    for i, row in enumerate(recs.itertuples(), 1):
-        msg += (
-            f"{i}️⃣ {row.hotel_name} – "
-            f"₹{getattr(row, PRICE_COL)}/night ⭐{row.star_rating}\n"
-        )
-
+    for i, row in enumerate(df.itertuples(), 1):
+        msg += f"{i}️⃣ {row.hotel_name} – ₹{getattr(row, PRICE_COL)}/night ⭐{row.star_rating}\n"
     msg += "\nReply with the hotel number."
     return msg
 
@@ -87,21 +79,16 @@ def handle_message(phone: str, message: str) -> str:
     db: Session = SessionLocal()
 
     try:
-        # --------------------------
         # RESET
-        # --------------------------
-        if message in {"hi", "hello", "start", "restart"}:
+        if message in {"hi", "hello", "start"}:
             booking = Booking(phone=phone, step=1)
             db.add(booking)
             db.commit()
             return "👋 Hi! May I have your name?"
 
-        booking = (
-            db.query(Booking)
-            .filter(Booking.phone == phone)
-            .order_by(Booking.id.desc())
-            .first()
-        )
+        booking = db.query(Booking).filter(
+            Booking.phone == phone
+        ).order_by(Booking.id.desc()).first()
 
         if not booking:
             booking = Booking(phone=phone, step=1)
@@ -109,18 +96,14 @@ def handle_message(phone: str, message: str) -> str:
             db.commit()
             return "May I have your name?"
 
-        # --------------------------
         # STEP 1: NAME
-        # --------------------------
         if booking.step == 1:
             booking.name = message.title()
             booking.step = 2
             db.commit()
             return f"Nice to meet you, {booking.name}! Which city is your hotel in?"
 
-        # --------------------------
         # STEP 2: CITY
-        # --------------------------
         if booking.step == 2:
             booking.location = message.title()
             booking.step = 3
@@ -132,12 +115,9 @@ def handle_message(phone: str, message: str) -> str:
                 "3️⃣ Other"
             )
 
-        # --------------------------
-        # STEP 3: CHECK-IN SELECTION
-        # --------------------------
+        # STEP 3: CHECK-IN
         if booking.step == 3:
             today = datetime.today().date()
-
             if message == "1":
                 booking.checkin = (today + timedelta(days=1)).isoformat()
             elif message == "2":
@@ -145,119 +125,93 @@ def handle_message(phone: str, message: str) -> str:
             elif message == "3":
                 booking.step = 31
                 db.commit()
-                return "Please enter your check-in date (YYYY-MM-DD)"
+                return "Enter check-in date (YYYY-MM-DD)"
             else:
-                return "❌ Please reply with 1, 2, or 3."
+                return "Reply with 1, 2, or 3."
 
             booking.step = 4
             db.commit()
 
-        # --------------------------
-        # STEP 31: MANUAL CHECK-IN
-        # --------------------------
+        # STEP 31: MANUAL DATE
         if booking.step == 31:
             try:
-                date = datetime.strptime(message, "%Y-%m-%d").date()
-                if date < datetime.today().date():
-                    return "❌ Check-in date cannot be in the past."
-
-                booking.checkin = date.isoformat()
+                booking.checkin = datetime.strptime(message, "%Y-%m-%d").date().isoformat()
                 booking.step = 4
                 db.commit()
             except ValueError:
-                return "❌ Please use YYYY-MM-DD format."
+                return "Invalid date format."
 
-        # --------------------------
-        # STEP 4: HISTORY / RECOMMENDATION
-        # --------------------------
+        # STEP 4: HISTORY / RECOMMEND
         if booking.step == 4:
             emp = get_employee(booking.name)
 
             if emp is not None:
                 prev = get_previous_good_hotel(emp["employee_id"], booking.location)
-
-                if prev is not None:
+                if prev:
+                    booking.selected_hotel = prev["hotel_name"]
+                    booking.selected_price = prev["price"]
                     booking.step = 41
                     db.commit()
                     return (
                         f"You previously stayed at *{prev['hotel_name']}* "
-                        f"(₹{prev[PRICE_COL]}/night).\n\n"
-                        "Would you like to book this hotel again?\n"
-                        "1️⃣ Yes\n"
-                        "2️⃣ Show other options"
+                        f"(₹{prev['price']}/night).\n\n"
+                        "1️⃣ Yes\n2️⃣ Show other options"
                     )
 
-                booking.step = 42
-                db.commit()
-                return build_recommendation_text(
-                    booking.location,
-                    emp["price_cap_per_night"]
-                )
+                recs = recommend_hotels(booking.location, emp["price_cap_per_night"])
+            else:
+                recs = recommend_hotels(booking.location)
 
-            booking.step = 42
+            booking.recommendations = recs.to_json()
+            booking.step = 45
             db.commit()
-            return build_recommendation_text(booking.location)
+            return build_recommendation_text(recs)
 
-        # --------------------------
         # STEP 41: REUSE HOTEL
-        # --------------------------
         if booking.step == 41:
             if message == "1":
                 booking.step = 5
                 db.commit()
-                return "Great choice! What is your check-out date? (YYYY-MM-DD)"
-
+                return "What is your check-out date? (YYYY-MM-DD)"
             if message == "2":
-                emp = get_employee(booking.name)
-                cap = emp["price_cap_per_night"] if emp is not None else None
-                booking.step = 42
+                recs = recommend_hotels(booking.location)
+                booking.recommendations = recs.to_json()
+                booking.step = 45
                 db.commit()
-                return build_recommendation_text(booking.location, cap)
+                return build_recommendation_text(recs)
 
-            return "❌ Please reply with 1 or 2."
+        # STEP 45: HOTEL SELECTION
+        if booking.step == 45:
+            recs = pd.read_json(booking.recommendations)
+            idx = int(message) - 1
 
-        # --------------------------
-        # STEP 42: HOTEL SELECTION
-        # --------------------------
-        if booking.step == 42:
-            if not message.isdigit():
-                return "❌ Please reply with the hotel number."
+            if idx < 0 or idx >= len(recs):
+                return "Invalid hotel number."
 
-            choice = int(message)
-            if choice not in {1, 2, 3}:
-                return "❌ Please select a valid hotel number (1, 2, or 3)."
-
+            hotel = recs.iloc[idx]
+            booking.selected_hotel = hotel["hotel_name"]
+            booking.selected_price = int(hotel[PRICE_COL])
             booking.step = 5
             db.commit()
-            return "Great choice! What is your check-out date? (YYYY-MM-DD)"
+            return "What is your check-out date? (YYYY-MM-DD)"
 
-        # --------------------------
         # STEP 5: CHECK-OUT
-        # --------------------------
         if booking.step == 5:
-            try:
-                checkout = datetime.strptime(message, "%Y-%m-%d").date()
-                checkin = datetime.fromisoformat(booking.checkin).date()
+            checkout = datetime.strptime(message, "%Y-%m-%d").date()
+            booking.checkout = checkout.isoformat()
+            booking.step = 6
+            db.commit()
 
-                if checkout <= checkin:
-                    return "❌ Check-out must be after check-in."
+            return (
+                "✅ Booking confirmed!\n\n"
+                f"🏨 Hotel: {booking.selected_hotel}\n"
+                f"💰 Price: ₹{booking.selected_price}/night\n"
+                f"📍 City: {booking.location}\n"
+                f"📅 {booking.checkin} → {booking.checkout}\n\n"
+                "Type *Hi* to book again."
+            )
 
-                booking.checkout = checkout.isoformat()
-                booking.step = 6
-                db.commit()
-
-                return (
-                    "✅ Booking confirmed!\n\n"
-                    f"📍 City: {booking.location}\n"
-                    f"📅 Check-in: {booking.checkin}\n"
-                    f"📅 Check-out: {booking.checkout}\n\n"
-                    "Type *Hi* to book again."
-                )
-
-            except ValueError:
-                return "❌ Please use YYYY-MM-DD format."
-
-        return "Type *Hi* to start a new booking."
+        return "Type Hi to start again."
 
     finally:
         db.close()
